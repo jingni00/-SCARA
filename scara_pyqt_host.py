@@ -268,7 +268,7 @@ class ScaraHost(QMainWindow):
             spin.setRange(-2000000000, 2000000000)
         self.set_ppr_btn = QPushButton("设置每圈脉冲")
         self.set_zero_btn = QPushButton("设置零位")
-        self.set_ppr_btn.clicked.connect(lambda: self.send_command(f"PPR N{self.ppr_spin.value()}"))
+        self.set_ppr_btn.clicked.connect(self.set_ppr)
         self.set_zero_btn.clicked.connect(
             lambda: self.send_command(f"SZ M1{self.zero1_spin.value()} M2{self.zero2_spin.value()}")
         )
@@ -651,7 +651,23 @@ class ScaraHost(QMainWindow):
     def send_immediate_command(self, command):
         self.command_queue.clear()
         self.queue_running = False
+        if command.strip() == "!":
+            self.send_estop()
+            return
         self.send_command(command)
+
+    def set_ppr(self):
+        self.send_command(f"PPR N{self.ppr_spin.value()}")
+        self.send_command("?", log_tx=False)
+
+    def send_estop(self):
+        if not self.serial.isOpen():
+            self.log_line("急停失败，串口未连接")
+            return
+        self.serial.write(b"!\r\n")
+        self.serial.flush()
+        self.state_label.setText("急停")
+        self.log_line("> !")
 
     def feed_text(self):
         profile = int(self.profile_combo.currentData())

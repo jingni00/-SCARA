@@ -124,6 +124,7 @@ static RobotContext robot;
 static volatile uint8_t rx_ring[RX_RING_SIZE];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
+static volatile uint8_t estop_request;
 static char rx_line[RX_LINE_SIZE];
 static uint16_t rx_line_len;
 static uint8_t pen_is_down;
@@ -139,6 +140,7 @@ static void Serial_Poll(void);
 static void Process_Command(char *line);
 static void Dda_Tick(void);
 static void Stop_Motion(uint8_t disable_motors);
+static void Handle_EStop_Request(void);
 static int32_t RoundI32(float value);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Planner_Start(float feed, float accel, SpeedProfile profile);
@@ -256,6 +258,12 @@ void SerialProtocol_RxIrqHandler(void)
     if (next >= RX_RING_SIZE)
     {
       next = 0U;
+    }
+
+    if (data == (uint8_t)'!')
+    {
+      estop_request = 1U;
+      return;
     }
 
     if (next != rx_tail)
@@ -1289,6 +1297,14 @@ static void Dda_Tick(void)
     return;
   }
 
+  if (estop_request != 0U)
+  {
+    estop_request = 0U;
+    Stop_Motion(1U);
+    Serial_Send("OK STOP\r\n");
+    return;
+  }
+
   p->tick_index++;
   now_s = ((float)p->tick_index * (float)DDA_TICK_US) / 1000000.0f;
   target_s = Planner_DistanceAt(p, now_s);
@@ -1318,6 +1334,16 @@ static void Dda_Tick(void)
   if ((target_s >= p->length) || (p->tick_index >= p->total_ticks))
   {
     Finish_Planner();
+  }
+}
+
+static void Handle_EStop_Request(void)
+{
+  if (estop_request != 0U)
+  {
+    estop_request = 0U;
+    Stop_Motion(1U);
+    Serial_Send("OK STOP\r\n");
   }
 }
 
@@ -1442,14 +1468,28 @@ static void Process_Command(char *line)
   else if (strncmp(line, "PPR", 3) == 0)
   {
     int32_t ppr = ParamI(line, "N", DEFAULT_STEPS_PER_REV);
+    int32_t old_ppr = robot.steps_per_rev;
     if (ppr <= 0)
     {
       Serial_Send("ER PPR\r\n");
     }
     else
     {
+      int32_t p1;
+      int32_t p2;
+
       robot.steps_per_rev = ppr;
-      Serial_Printf("OK PPR %ld\r\n", (long)robot.steps_per_rev);
+      if (Scara_IK(robot.x, robot.y, &p1, &p2) == 0U)
+      {
+        robot.steps_per_rev = old_ppr;
+        Serial_Send("ER PPR IK\r\n");
+      }
+      else
+      {
+        robot.motor1_pos = p1;
+        robot.motor2_pos = p2;
+        Serial_Printf("OK PPR %ld\r\n", (long)robot.steps_per_rev);
+      }
     }
   }
   else if (strncmp(line, "SZ", 2) == 0)
@@ -1604,6 +1644,7 @@ int main(void)
   while (1)
   {
     Photo_ReportChanges();
+    Handle_EStop_Request();
     Serial_Poll();
   }
 }
