@@ -17,14 +17,14 @@
 #define BASE_Y_MM                 0.0f
 #define TWO_PI                    6.2831853071795864769f
 
-#define DEFAULT_STEPS_PER_REV     3062L
+#define DEFAULT_STEPS_PER_REV     6124L
 #define DEFAULT_FEED_MM_S         12.0f
 #define DEFAULT_ACCEL_MM_S2       35.0f
 #define DEFAULT_JOG_MM            5.0f
 #define DEFAULT_HOME_X_MM         0.0f
 #define DEFAULT_HOME_Y_MM         314.94f
 
-#define DDA_TICK_US               500UL
+#define DDA_TICK_US               250UL
 #define MIN_SEGMENT_MM            0.10f
 #define MAX_BLOCKS                96U
 #define MAX_STEP_FREQ_HZ          25000.0f
@@ -116,8 +116,6 @@ typedef struct
   int32_t zero1;
   int32_t zero2;
   int32_t steps_per_rev;
-  int8_t motor1_dir_sign;
-  int8_t motor2_dir_sign;
   DdaPlanner planner;
 } RobotContext;
 
@@ -443,19 +441,16 @@ static void Servo_PenDown(void)
 static void Set_Dir(uint8_t motor_index, int32_t delta)
 {
   GPIO_PinState level;
-  int32_t signed_delta;
 
   if (motor_index == 1U)
   {
-    signed_delta = (robot.motor1_dir_sign >= 0) ? delta : -delta;
-    level = (signed_delta >= 0) ? MOTOR1_POS_DIR_LEVEL :
+    level = (delta >= 0) ? MOTOR1_POS_DIR_LEVEL :
             ((MOTOR1_POS_DIR_LEVEL == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
     HAL_GPIO_WritePin(DIR1_GPIO_Port, DIR1_Pin, level);
   }
   else
   {
-    signed_delta = (robot.motor2_dir_sign >= 0) ? delta : -delta;
-    level = (signed_delta >= 0) ? MOTOR2_POS_DIR_LEVEL :
+    level = (delta >= 0) ? MOTOR2_POS_DIR_LEVEL :
             ((MOTOR2_POS_DIR_LEVEL == GPIO_PIN_SET) ? GPIO_PIN_RESET : GPIO_PIN_SET);
     HAL_GPIO_WritePin(DIR2_GPIO_Port, DIR2_Pin, level);
   }
@@ -1486,7 +1481,7 @@ static void Process_Command(char *line)
   }
   else if ((strcmp(line, "HELP") == 0) || (strcmp(line, "$") == 0))
   {
-    Serial_Send("CMD: G1 X.. Y.. F.. A.. C0/C1 | G2/G3 X.. Y.. I.. J.. C0/C1 | DRAW1..DRAW4 F.. A.. | J X+ 5 C0/C1 | SXY X.. Y.. | SZ M1 M2 | PPR N | MDIR M1+1 M2-1 | P0/P1 | SW | M17 | M18 | ! | ?\r\n");
+    Serial_Send("CMD: G1 X.. Y.. F.. A.. C0/C1 | G2/G3 X.. Y.. I.. J.. C0/C1 | DRAW1..DRAW4 F.. A.. | J X+ 5 C0/C1 | SXY X.. Y.. | SZ M1 M2 | PPR N | P0/P1 | SW | M17 | M18 | ! | ?\r\n");
   }
   else if ((strcmp(line, "M17") == 0) || (strcmp(line, "E1") == 0))
   {
@@ -1548,17 +1543,6 @@ static void Process_Command(char *line)
                       (long)robot.zero2);
       }
     }
-  }
-  else if (strncmp(line, "MDIR", 4) == 0)
-  {
-    int32_t m1 = ParamI(line, "M1", (int32_t)robot.motor1_dir_sign);
-    int32_t m2 = ParamI(line, "M2", (int32_t)robot.motor2_dir_sign);
-
-    robot.motor1_dir_sign = (m1 < 0) ? -1 : 1;
-    robot.motor2_dir_sign = (m2 < 0) ? -1 : 1;
-    Serial_Printf("OK MDIR M1%+d M2%+d\r\n",
-                  (int)robot.motor1_dir_sign,
-                  (int)robot.motor2_dir_sign);
   }
   else if (strncmp(line, "SZ", 2) == 0)
   {
@@ -1685,8 +1669,6 @@ static void Robot_Init(void)
   robot.steps_per_rev = DEFAULT_STEPS_PER_REV;
   robot.zero1 = 0L;
   robot.zero2 = 0L;
-  robot.motor1_dir_sign = 1;
-  robot.motor2_dir_sign = 1;
   robot.x = DEFAULT_HOME_X_MM;
   robot.y = DEFAULT_HOME_Y_MM;
 

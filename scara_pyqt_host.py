@@ -260,28 +260,22 @@ class ScaraHost(QMainWindow):
         setup_layout = QFormLayout(setup)
         self.ppr_spin = QSpinBox()
         self.ppr_spin.setRange(1, 200000)
-        self.ppr_spin.setValue(3062)
+        self.ppr_spin.setValue(6124)
         self.zero1_spin = QSpinBox()
         self.zero2_spin = QSpinBox()
         for spin in (self.zero1_spin, self.zero2_spin):
             spin.setRange(-2000000000, 2000000000)
         self.set_ppr_btn = QPushButton("设置每圈脉冲")
         self.set_zero_btn = QPushButton("设置零位")
-        self.m1_reverse_check = QCheckBox("M1 反向")
-        self.m2_reverse_check = QCheckBox("M2 反向")
-        self.set_mdir_btn = QPushButton("设置电机方向")
         self.set_ppr_btn.clicked.connect(self.set_ppr)
         self.set_zero_btn.clicked.connect(
             lambda: self.send_command(f"SZ M1{self.zero1_spin.value()} M2{self.zero2_spin.value()}")
         )
-        self.set_mdir_btn.clicked.connect(self.set_motor_direction)
         setup_layout.addRow("PPR", self.ppr_spin)
         setup_layout.addRow(self.set_ppr_btn)
         setup_layout.addRow("零位 M1", self.zero1_spin)
         setup_layout.addRow("零位 M2", self.zero2_spin)
         setup_layout.addRow(self.set_zero_btn)
-        setup_layout.addRow(self.m1_reverse_check, self.m2_reverse_check)
-        setup_layout.addRow(self.set_mdir_btn)
         layout.addWidget(setup)
 
         layout.addStretch(1)
@@ -664,11 +658,6 @@ class ScaraHost(QMainWindow):
     def set_ppr(self):
         self.send_command(f"PPR N{self.ppr_spin.value()}")
         self.send_command("?", log_tx=False)
-
-    def set_motor_direction(self):
-        m1 = -1 if self.m1_reverse_check.isChecked() else 1
-        m2 = -1 if self.m2_reverse_check.isChecked() else 1
-        self.send_command(f"MDIR M1{m1:+d} M2{m2:+d}")
 
     def send_estop(self):
         if not self.serial.isOpen():
