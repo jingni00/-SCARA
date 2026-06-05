@@ -24,7 +24,7 @@
 #define DEFAULT_HOME_X_MM         0.0f
 #define DEFAULT_HOME_Y_MM         314.94f
 
-#define DDA_TICK_US               500UL
+#define DDA_TICK_US               250UL
 #define MIN_SEGMENT_MM            0.10f
 #define MAX_BLOCKS                96U
 #define MAX_STEP_FREQ_HZ          25000.0f
