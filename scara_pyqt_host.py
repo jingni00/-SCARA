@@ -707,14 +707,23 @@ class ScaraHost(QMainWindow):
 
     def draw_selected_path(self, profile=0):
         pattern_id = self.selected_draw_pattern()
+        start_x, start_y = self.draw_pattern_start(pattern_id)
         end_x, end_y = self.draw_pattern_end(pattern_id)
         self.workspace.clear_path()
         self.workspace.set_preview_path(self.draw_path_preview_points(pattern_id))
         self.workspace.set_target(end_x, end_y)
-        self.send_command(
-            f"DRAW{pattern_id} F{self.feed_spin.value():.3f} "
-            f"A{self.accel_spin.value():.3f} C{int(profile)}"
-        )
+        commands = [
+            "P0",
+            f"G1 X{start_x:.3f} Y{start_y:.3f} {self.feed_text()}",
+            "P1",
+            "@WAIT 500",
+            (
+                f"DRAW{pattern_id} F{self.feed_spin.value():.3f} "
+                f"A{self.accel_spin.value():.3f} C{int(profile)}"
+            ),
+            "P0",
+        ]
+        self.start_command_queue(commands)
 
     def selected_draw_pattern(self):
         if not hasattr(self, "draw_pattern_combo"):
@@ -762,6 +771,7 @@ class ScaraHost(QMainWindow):
         rounded = self.round_polyline(points, 0.8, 6)
         rounded.extend(self.sample_arc((-20.0, 180.1), (20.0, 180.1), (0.0, 180.0), cw=False, steps=24)[1:])
         rounded.extend(self.round_polyline(tail, 0.8, 6)[1:])
+        rounded.append(points[0])
         return rounded
 
     def star_preview_points(self):
@@ -1028,6 +1038,12 @@ class ScaraHost(QMainWindow):
             self.log_line("队列完成")
             return
         command = self.command_queue.pop(0)
+        if command.startswith("@WAIT"):
+            parts = command.split()
+            delay_ms = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 500
+            self.log_line(f"等待 {delay_ms} ms")
+            QTimer.singleShot(delay_ms, self.send_next_queued_command)
+            return
         self.send_command(command)
 
     def round_polyline(self, points, radius, arc_steps):

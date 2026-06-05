@@ -1071,6 +1071,7 @@ static uint8_t Start_DrawPath1(float feed, float accel, SpeedProfile profile)
     (void)Planner_AddRoundedCorner(tail[i - 1U], tail[i], tail[i + 1U], &cursor, corner_radius);
   }
   (void)Planner_AddLine(cursor.x, cursor.y, tail[4].x, tail[4].y);
+  (void)Planner_AddLine(tail[4].x, tail[4].y, pts[0].x, pts[0].y);
 
   if (Planner_Start(feed, accel, profile) != 0U)
   {
