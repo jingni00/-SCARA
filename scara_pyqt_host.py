@@ -712,9 +712,10 @@ class ScaraHost(QMainWindow):
         self.workspace.clear_path()
         self.workspace.set_preview_path(self.draw_path_preview_points(pattern_id))
         self.workspace.set_target(end_x, end_y)
-        commands = [
-            "P0",
-            f"G1 X{start_x:.3f} Y{start_y:.3f} {self.feed_text()}",
+        commands = ["P0"]
+        if self.distance((self.last_x, self.last_y), (start_x, start_y)) > 0.5:
+            commands.append(f"G1 X{start_x:.3f} Y{start_y:.3f} {self.feed_text()}")
+        commands.extend([
             "P1",
             "@WAIT 500",
             (
@@ -722,7 +723,7 @@ class ScaraHost(QMainWindow):
                 f"A{self.accel_spin.value():.3f} C{int(profile)}"
             ),
             "P0",
-        ]
+        ])
         self.start_command_queue(commands)
 
     def selected_draw_pattern(self):

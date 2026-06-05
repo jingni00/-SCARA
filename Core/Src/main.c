@@ -1207,6 +1207,17 @@ static uint8_t Start_Line(float x, float y, float feed, float accel, SpeedProfil
     return 0U;
   }
 
+  if (Point_Distance((Point2D){robot.x, robot.y}, (Point2D){x, y}) < MIN_SEGMENT_MM)
+  {
+    robot.x = x;
+    robot.y = y;
+    robot.motor1_pos = p1;
+    robot.motor2_pos = p2;
+    Serial_Send("OK G1\r\n");
+    Serial_Send("RDY\r\n");
+    return 1U;
+  }
+
   Planner_Clear();
   if (Planner_AddLine(robot.x, robot.y, x, y) == 0U)
   {
