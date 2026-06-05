@@ -124,6 +124,8 @@ static volatile uint8_t rx_ring[RX_RING_SIZE];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 static volatile uint8_t estop_request;
+static volatile uint8_t planner_done_request;
+static volatile uint8_t estop_reply_request;
 static char rx_line[RX_LINE_SIZE];
 static uint16_t rx_line_len;
 static uint8_t pen_is_down;
@@ -140,6 +142,7 @@ static void Process_Command(char *line);
 static void Dda_Tick(void);
 static void Stop_Motion(uint8_t disable_motors);
 static void Handle_EStop_Request(void);
+static void Handle_Planner_Done_Request(void);
 static int32_t RoundI32(float value);
 static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
@@ -1305,7 +1308,7 @@ static void Finish_Planner(void)
   robot.motor2_pos = p->motor2_pos;
   Planner_Clear();
   robot.state = MACHINE_IDLE;
-  Serial_Send("RDY\r\n");
+  planner_done_request = 1U;
 }
 
 static void Dda_Tick(void)
@@ -1328,7 +1331,7 @@ static void Dda_Tick(void)
   {
     estop_request = 0U;
     Stop_Motion(1U);
-    Serial_Send("OK STOP\r\n");
+    estop_reply_request = 1U;
     return;
   }
 
@@ -1370,7 +1373,22 @@ static void Handle_EStop_Request(void)
   {
     estop_request = 0U;
     Stop_Motion(1U);
+    estop_reply_request = 1U;
+  }
+
+  if (estop_reply_request != 0U)
+  {
+    estop_reply_request = 0U;
     Serial_Send("OK STOP\r\n");
+  }
+}
+
+static void Handle_Planner_Done_Request(void)
+{
+  if (planner_done_request != 0U)
+  {
+    planner_done_request = 0U;
+    Serial_Send("RDY\r\n");
   }
 }
 
@@ -1679,6 +1697,7 @@ int main(void)
   {
     Photo_ReportChanges();
     Handle_EStop_Request();
+    Handle_Planner_Done_Request();
     Serial_Poll();
   }
 }
