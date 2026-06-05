@@ -17,14 +17,14 @@
 #define BASE_Y_MM                 0.0f
 #define TWO_PI                    6.2831853071795864769f
 
-#define DEFAULT_STEPS_PER_REV     6124L
+#define DEFAULT_STEPS_PER_REV     3062L
 #define DEFAULT_FEED_MM_S         12.0f
 #define DEFAULT_ACCEL_MM_S2       35.0f
 #define DEFAULT_JOG_MM            5.0f
 #define DEFAULT_HOME_X_MM         0.0f
 #define DEFAULT_HOME_Y_MM         314.94f
 
-#define DDA_TICK_US               250UL
+#define DDA_TICK_US               500UL
 #define MIN_SEGMENT_MM            0.10f
 #define MAX_BLOCKS                96U
 #define MAX_STEP_FREQ_HZ          25000.0f
