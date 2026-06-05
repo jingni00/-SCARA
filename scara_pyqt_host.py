@@ -34,7 +34,6 @@ from PyQt5.QtWidgets import (
 
 
 BAUD_RATES = (115200, 57600, 38400, 19200, 9600)
-DRAW1_CLOSE_OVERLAP_MM = 2.0
 POS_RE = re.compile(
     r"POS\s+X(?P<x>[-+]?\d+(?:\.\d+)?)\s+Y(?P<y>[-+]?\d+(?:\.\d+)?)"
     r"\s+M1(?P<m1>[-+]?\d+)\s+M2(?P<m2>[-+]?\d+)\s+(?P<state>\w+)"
@@ -758,7 +757,7 @@ class ScaraHost(QMainWindow):
             (45.0, 180.1),
             (15.0, 210.1),
             (15.0, 230.1),
-            (-DRAW1_CLOSE_OVERLAP_MM, 230.1),
+            (0.0, 230.1),
         ]
         rounded = self.round_polyline(points, 0.8, 6)
         rounded.extend(self.sample_arc((-20.0, 180.1), (20.0, 180.1), (0.0, 180.0), cw=False, steps=24)[1:])

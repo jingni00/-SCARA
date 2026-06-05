@@ -33,7 +33,6 @@
 #define SERVO_DOWN_CCR            30U
 #define SERVO_SETTLE_MS           300U
 #define PHOTO_ACTIVE_LEVEL        GPIO_PIN_RESET
-#define DRAW1_CLOSE_OVERLAP_MM    2.0f
 
 #define MOTOR_EN_ACTIVE           GPIO_PIN_RESET
 #define MOTOR_EN_DISABLE          GPIO_PIN_SET
@@ -142,6 +141,7 @@ static void Dda_Tick(void);
 static void Stop_Motion(uint8_t disable_motors);
 static void Handle_EStop_Request(void);
 static int32_t RoundI32(float value);
+static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Planner_Start(float feed, float accel, SpeedProfile profile);
 static void Servo_PenUp(void);
@@ -465,7 +465,7 @@ static void Pulse_Pin(GPIO_TypeDef *port, uint16_t pin)
   HAL_GPIO_WritePin(port, pin, GPIO_PIN_RESET);
 }
 
-static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
+static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
 {
   float x = x_ui;
   float y = y_ui - BASE_Y_MM;
@@ -505,8 +505,23 @@ static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
   th_l = atan2f(y, dx_l) + acosf(cl);
   th_r = atan2f(y, dx_r) - acosf(cr);
 
-  *p1 = robot.zero1 + RoundI32((th_l / TWO_PI) * (float)robot.steps_per_rev);
-  *p2 = robot.zero2 + RoundI32((th_r / TWO_PI) * (float)robot.steps_per_rev);
+  *p1 = RoundI32((th_l / TWO_PI) * (float)robot.steps_per_rev);
+  *p2 = RoundI32((th_r / TWO_PI) * (float)robot.steps_per_rev);
+  return 1U;
+}
+
+static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
+{
+  int32_t raw1;
+  int32_t raw2;
+
+  if (Scara_IK_Raw(x_ui, y_ui, &raw1, &raw2) == 0U)
+  {
+    return 0U;
+  }
+
+  *p1 = robot.zero1 + raw1;
+  *p2 = robot.zero2 + raw2;
   return 1U;
 }
 
@@ -1023,7 +1038,7 @@ static uint8_t Start_DrawPath1(float feed, float accel, SpeedProfile profile)
       {45.0f, 180.1f},
       {15.0f, 210.1f},
       {15.0f, 230.1f},
-      {-DRAW1_CLOSE_OVERLAP_MM, 230.1f}};
+      {0.0f, 230.1f}};
   uint16_t i;
 
   if (robot.state == MACHINE_RUN)
@@ -1469,26 +1484,33 @@ static void Process_Command(char *line)
   {
     int32_t ppr = ParamI(line, "N", DEFAULT_STEPS_PER_REV);
     int32_t old_ppr = robot.steps_per_rev;
+    int32_t old_zero1 = robot.zero1;
+    int32_t old_zero2 = robot.zero2;
     if (ppr <= 0)
     {
       Serial_Send("ER PPR\r\n");
     }
     else
     {
-      int32_t p1;
-      int32_t p2;
+      int32_t raw1;
+      int32_t raw2;
 
       robot.steps_per_rev = ppr;
-      if (Scara_IK(robot.x, robot.y, &p1, &p2) == 0U)
+      if (Scara_IK_Raw(robot.x, robot.y, &raw1, &raw2) == 0U)
       {
         robot.steps_per_rev = old_ppr;
+        robot.zero1 = old_zero1;
+        robot.zero2 = old_zero2;
         Serial_Send("ER PPR IK\r\n");
       }
       else
       {
-        robot.motor1_pos = p1;
-        robot.motor2_pos = p2;
-        Serial_Printf("OK PPR %ld\r\n", (long)robot.steps_per_rev);
+        robot.zero1 = robot.motor1_pos - raw1;
+        robot.zero2 = robot.motor2_pos - raw2;
+        Serial_Printf("OK PPR %ld Z1%ld Z2%ld\r\n",
+                      (long)robot.steps_per_rev,
+                      (long)robot.zero1,
+                      (long)robot.zero2);
       }
     }
   }
