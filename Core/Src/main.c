@@ -33,6 +33,7 @@
 #define SERVO_DOWN_CCR            30U
 #define SERVO_SETTLE_MS           300U
 #define PHOTO_ACTIVE_LEVEL        GPIO_PIN_RESET
+#define DRAW1_CLOSE_OVERLAP_MM    2.0f
 
 #define MOTOR_EN_ACTIVE           GPIO_PIN_RESET
 #define MOTOR_EN_DISABLE          GPIO_PIN_SET
@@ -1014,7 +1015,7 @@ static uint8_t Start_DrawPath1(float feed, float accel, SpeedProfile profile)
       {45.0f, 180.1f},
       {15.0f, 210.1f},
       {15.0f, 230.1f},
-      {0.0f, 230.1f}};
+      {-DRAW1_CLOSE_OVERLAP_MM, 230.1f}};
   uint16_t i;
 
   if (robot.state == MACHINE_RUN)
