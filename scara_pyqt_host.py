@@ -260,7 +260,7 @@ class ScaraHost(QMainWindow):
         setup_layout = QFormLayout(setup)
         self.ppr_spin = QSpinBox()
         self.ppr_spin.setRange(1, 200000)
-        self.ppr_spin.setValue(3062)
+        self.ppr_spin.setValue(6124)
         self.zero1_spin = QSpinBox()
         self.zero2_spin = QSpinBox()
         for spin in (self.zero1_spin, self.zero2_spin):
