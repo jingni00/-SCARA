@@ -33,6 +33,10 @@
 #define SERVO_DOWN_CCR            30U
 #define SERVO_SETTLE_MS           300U
 #define PHOTO_ACTIVE_LEVEL        GPIO_PIN_RESET
+#define HOME_SEEK_STEP_DELAY_MS   3U
+#define HOME_SEEK_MAX_STEPS       20000L
+#define HOME_SEEK_M1_DIR          -1L
+#define HOME_SEEK_M2_DIR          -1L
 
 #define MOTOR_EN_ACTIVE           GPIO_PIN_RESET
 #define MOTOR_EN_DISABLE          GPIO_PIN_SET
@@ -143,6 +147,9 @@ static void Dda_Tick(void);
 static void Stop_Motion(uint8_t disable_motors);
 static void Handle_EStop_Request(void);
 static void Handle_Planner_Done_Request(void);
+static void Motors_Enable(void);
+static void Set_Dir(uint8_t motor_index, int32_t delta);
+static void Pulse_Pin(GPIO_TypeDef *port, uint16_t pin);
 static int32_t RoundI32(float value);
 static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
@@ -153,6 +160,10 @@ static uint8_t Photo_IsActive(GPIO_TypeDef *port, uint16_t pin);
 static void Photo_SetLastState(void);
 static void Photo_ReportChanges(void);
 static void Serial_SendSwitchStatus(void);
+static uint8_t Home_SeekMotor(uint8_t motor_index, int32_t direction,
+                              GPIO_TypeDef *sensor_port, uint16_t sensor_pin);
+static uint8_t Start_PhotoHome(void);
+static void Set_SoftwareHome(void);
 
 static void Serial_Send(const char *text)
 {
@@ -241,6 +252,93 @@ static void Serial_SendSwitchStatus(void)
   Serial_Printf("SW A%u B%u\r\n",
                 (unsigned int)Photo_IsActive(AIN1_GPIO_Port, AIN1_Pin),
                 (unsigned int)Photo_IsActive(BIN1_GPIO_Port, BIN1_Pin));
+}
+
+static uint8_t Home_SeekMotor(uint8_t motor_index, int32_t direction,
+                              GPIO_TypeDef *sensor_port, uint16_t sensor_pin)
+{
+  int32_t steps;
+  int32_t delta = (direction >= 0L) ? 1L : -1L;
+
+  for (steps = 0L; steps < HOME_SEEK_MAX_STEPS; steps++)
+  {
+    if (Photo_IsActive(sensor_port, sensor_pin) != 0U)
+    {
+      return 1U;
+    }
+
+    if (estop_request != 0U)
+    {
+      return 0U;
+    }
+
+    Set_Dir(motor_index, delta);
+    if (motor_index == 1U)
+    {
+      Pulse_Pin(STEP1_GPIO_Port, STEP1_Pin);
+      robot.motor1_pos += delta;
+    }
+    else
+    {
+      Pulse_Pin(STEP2_GPIO_Port, STEP2_Pin);
+      robot.motor2_pos += delta;
+    }
+    HAL_Delay(HOME_SEEK_STEP_DELAY_MS);
+  }
+
+  return 0U;
+}
+
+static void Set_SoftwareHome(void)
+{
+  int32_t p1;
+  int32_t p2;
+
+  robot.zero1 = 0L;
+  robot.zero2 = 0L;
+  robot.x = DEFAULT_HOME_X_MM;
+  robot.y = DEFAULT_HOME_Y_MM;
+  if (Scara_IK(robot.x, robot.y, &p1, &p2) != 0U)
+  {
+    robot.motor1_pos = p1;
+    robot.motor2_pos = p2;
+  }
+  robot.state = MACHINE_IDLE;
+}
+
+static uint8_t Start_PhotoHome(void)
+{
+  if (robot.state == MACHINE_RUN)
+  {
+    Stop_Motion(0U);
+  }
+
+  Servo_PenUp();
+  Motors_Enable();
+  robot.state = MACHINE_RUN;
+  Serial_Send("OK HOME START\r\n");
+
+  if (Home_SeekMotor(1U, HOME_SEEK_M1_DIR, AIN1_GPIO_Port, AIN1_Pin) == 0U)
+  {
+    Stop_Motion(0U);
+    Serial_Send("ER HOME M1\r\n");
+    return 0U;
+  }
+  Serial_Send("OK HOME M1\r\n");
+
+  if (Home_SeekMotor(2U, HOME_SEEK_M2_DIR, BIN1_GPIO_Port, BIN1_Pin) == 0U)
+  {
+    Stop_Motion(0U);
+    Serial_Send("ER HOME M2\r\n");
+    return 0U;
+  }
+  Serial_Send("OK HOME M2\r\n");
+
+  Set_SoftwareHome();
+  Photo_SetLastState();
+  Serial_Send("OK HOME SET\r\n");
+  Serial_SendStatus();
+  return 1U;
 }
 
 void SerialProtocol_RxIrqHandler(void)
@@ -1481,7 +1579,7 @@ static void Process_Command(char *line)
   }
   else if ((strcmp(line, "HELP") == 0) || (strcmp(line, "$") == 0))
   {
-    Serial_Send("CMD: G1 X.. Y.. F.. A.. C0/C1 | G2/G3 X.. Y.. I.. J.. C0/C1 | DRAW1..DRAW4 F.. A.. | J X+ 5 C0/C1 | SXY X.. Y.. | SZ M1 M2 | PPR N | P0/P1 | SW | M17 | M18 | ! | ?\r\n");
+    Serial_Send("CMD: G1 X.. Y.. F.. A.. C0/C1 | G2/G3 X.. Y.. I.. J.. C0/C1 | DRAW1..DRAW4 F.. A.. | J X+ 5 C0/C1 | SXY X.. Y.. | SZ M1 M2 | PPR N | P0/P1 | SW | HOME | SETHOME | M17 | M18 | ! | ?\r\n");
   }
   else if ((strcmp(line, "M17") == 0) || (strcmp(line, "E1") == 0))
   {
@@ -1574,19 +1672,13 @@ static void Process_Command(char *line)
   }
   else if ((strcmp(line, "HOME") == 0) || (strcmp(line, "H") == 0))
   {
-    int32_t p1;
-    int32_t p2;
-
-    Stop_Motion(0U);
-    robot.x = DEFAULT_HOME_X_MM;
-    robot.y = DEFAULT_HOME_Y_MM;
-    if (Scara_IK(robot.x, robot.y, &p1, &p2) != 0U)
-    {
-      robot.motor1_pos = p1;
-      robot.motor2_pos = p2;
-    }
-    robot.state = MACHINE_IDLE;
+    (void)Start_PhotoHome();
+  }
+  else if (strcmp(line, "SETHOME") == 0)
+  {
+    Set_SoftwareHome();
     Serial_Send("OK HOME SET\r\n");
+    Serial_SendStatus();
   }
   else if (strncmp(line, "G1", 2) == 0)
   {
