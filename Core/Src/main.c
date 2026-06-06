@@ -34,6 +34,7 @@
 #define SERVO_SETTLE_MS           300U
 #define PHOTO_ACTIVE_LEVEL        GPIO_PIN_RESET
 #define HOME_SEEK_STEP_DELAY_MS   3U
+#define HOME_RELEASE_MAX_STEPS    3000L
 #define HOME_SEEK_MAX_STEPS       20000L
 #define HOME_SEEK_M1_DIR          -1L
 #define HOME_SEEK_M2_DIR          -1L
@@ -160,6 +161,7 @@ static uint8_t Photo_IsActive(GPIO_TypeDef *port, uint16_t pin);
 static void Photo_SetLastState(void);
 static void Photo_ReportChanges(void);
 static void Serial_SendSwitchStatus(void);
+static void Home_StepMotor(uint8_t motor_index, int32_t delta);
 static uint8_t Home_SeekMotor(uint8_t motor_index, int32_t direction,
                               GPIO_TypeDef *sensor_port, uint16_t sensor_pin);
 static uint8_t Start_PhotoHome(void);
@@ -254,12 +256,51 @@ static void Serial_SendSwitchStatus(void)
                 (unsigned int)Photo_IsActive(BIN1_GPIO_Port, BIN1_Pin));
 }
 
+static void Home_StepMotor(uint8_t motor_index, int32_t delta)
+{
+  Set_Dir(motor_index, delta);
+  if (motor_index == 1U)
+  {
+    Pulse_Pin(STEP1_GPIO_Port, STEP1_Pin);
+    robot.motor1_pos += delta;
+  }
+  else
+  {
+    Pulse_Pin(STEP2_GPIO_Port, STEP2_Pin);
+    robot.motor2_pos += delta;
+  }
+  HAL_Delay(HOME_SEEK_STEP_DELAY_MS);
+}
+
 static uint8_t Home_SeekMotor(uint8_t motor_index, int32_t direction,
                               GPIO_TypeDef *sensor_port, uint16_t sensor_pin)
 {
   int32_t steps;
   int32_t delta = (direction >= 0L) ? 1L : -1L;
 
+  if (Photo_IsActive(sensor_port, sensor_pin) != 0U)
+  {
+    Serial_Printf("OK HOME M%u RELEASE\r\n", (unsigned int)motor_index);
+    for (steps = 0L; steps < HOME_RELEASE_MAX_STEPS; steps++)
+    {
+      if (estop_request != 0U)
+      {
+        return 0U;
+      }
+      if (Photo_IsActive(sensor_port, sensor_pin) == 0U)
+      {
+        break;
+      }
+      Home_StepMotor(motor_index, -delta);
+    }
+
+    if (Photo_IsActive(sensor_port, sensor_pin) != 0U)
+    {
+      return 0U;
+    }
+  }
+
+  Serial_Printf("OK HOME M%u SEEK\r\n", (unsigned int)motor_index);
   for (steps = 0L; steps < HOME_SEEK_MAX_STEPS; steps++)
   {
     if (Photo_IsActive(sensor_port, sensor_pin) != 0U)
@@ -272,18 +313,7 @@ static uint8_t Home_SeekMotor(uint8_t motor_index, int32_t direction,
       return 0U;
     }
 
-    Set_Dir(motor_index, delta);
-    if (motor_index == 1U)
-    {
-      Pulse_Pin(STEP1_GPIO_Port, STEP1_Pin);
-      robot.motor1_pos += delta;
-    }
-    else
-    {
-      Pulse_Pin(STEP2_GPIO_Port, STEP2_Pin);
-      robot.motor2_pos += delta;
-    }
-    HAL_Delay(HOME_SEEK_STEP_DELAY_MS);
+    Home_StepMotor(motor_index, delta);
   }
 
   return 0U;
