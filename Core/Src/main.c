@@ -36,7 +36,7 @@
 #define HOME_SEEK_STEP_DELAY_MS   3U
 #define HOME_RELEASE_MAX_STEPS    3000L
 #define HOME_SEEK_MAX_STEPS       20000L
-#define HOME_SEEK_M1_DIR          -1L
+#define HOME_SEEK_M1_DIR          1L
 #define HOME_SEEK_M2_DIR          1L
 
 #define MOTOR_EN_ACTIVE           GPIO_PIN_RESET
