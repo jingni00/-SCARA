@@ -318,7 +318,7 @@ static uint8_t Start_PhotoHome(void)
   robot.state = MACHINE_RUN;
   Serial_Send("OK HOME START\r\n");
 
-  if (Home_SeekMotor(1U, HOME_SEEK_M1_DIR, AIN1_GPIO_Port, AIN1_Pin) == 0U)
+  if (Home_SeekMotor(1U, HOME_SEEK_M1_DIR, BIN1_GPIO_Port, BIN1_Pin) == 0U)
   {
     Stop_Motion(0U);
     Serial_Send("ER HOME M1\r\n");
@@ -326,7 +326,7 @@ static uint8_t Start_PhotoHome(void)
   }
   Serial_Send("OK HOME M1\r\n");
 
-  if (Home_SeekMotor(2U, HOME_SEEK_M2_DIR, BIN1_GPIO_Port, BIN1_Pin) == 0U)
+  if (Home_SeekMotor(2U, HOME_SEEK_M2_DIR, AIN1_GPIO_Port, AIN1_Pin) == 0U)
   {
     Stop_Motion(0U);
     Serial_Send("ER HOME M2\r\n");

@@ -1228,9 +1228,9 @@ class ScaraHost(QMainWindow):
             return
         active = []
         if match.group("a") == "1":
-            active.append("PB0")
+            active.append("右PB0")
         if match.group("b") == "1":
-            active.append("PA1")
+            active.append("左PA1")
         if active:
             self.state_label.setText("光电遮挡 " + "/".join(active))
         else:
