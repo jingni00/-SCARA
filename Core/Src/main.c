@@ -28,15 +28,16 @@
 #define MIN_SEGMENT_MM            0.10f
 #define MAX_BLOCKS                96U
 #define MAX_STEP_FREQ_HZ          25000.0f
+#define STEP_TIMER_US             10UL
 
 #define SERVO_UP_CCR              40U
 #define SERVO_DOWN_CCR            30U
 #define SERVO_SETTLE_MS           300U
-#define PHOTO_ACTIVE_LEVEL        GPIO_PIN_RESET
+#define PHOTO_ACTIVE_LEVEL        GPIO_PIN_SET
 #define HOME_SEEK_STEP_DELAY_MS   3U
 #define HOME_RELEASE_MAX_STEPS    3000L
 #define HOME_SEEK_MAX_STEPS       20000L
-#define HOME_SEEK_M1_DIR          1L
+#define HOME_SEEK_M1_DIR          -1L
 #define HOME_SEEK_M2_DIR          1L
 
 #define MOTOR_EN_ACTIVE           GPIO_PIN_RESET
@@ -44,8 +45,10 @@
 #define MOTOR1_POS_DIR_LEVEL      GPIO_PIN_RESET
 #define MOTOR2_POS_DIR_LEVEL      GPIO_PIN_SET
 #define STEP_PULSE_DELAY          162U
+#define STEP_SLOTS_PER_DDA        (DDA_TICK_US / STEP_TIMER_US)
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 typedef enum
@@ -124,7 +127,21 @@ typedef struct
   DdaPlanner planner;
 } RobotContext;
 
+typedef struct
+{
+  uint8_t active;
+  uint16_t total_slots;
+  uint16_t slot_index;
+  uint32_t n1;
+  uint32_t n2;
+  uint32_t acc1;
+  uint32_t acc2;
+  int32_t dir1;
+  int32_t dir2;
+} StepTimerContext;
+
 static RobotContext robot;
+static volatile StepTimerContext step_timer;
 static volatile uint8_t rx_ring[RX_RING_SIZE];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
@@ -140,6 +157,7 @@ static uint8_t photo_last_b;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void Serial_Init(void);
 static void Serial_Poll(void);
@@ -151,6 +169,10 @@ static void Handle_Planner_Done_Request(void);
 static void Motors_Enable(void);
 static void Set_Dir(uint8_t motor_index, int32_t delta);
 static void Pulse_Pin(GPIO_TypeDef *port, uint16_t pin);
+static void Pulse_Motors(uint8_t step1, uint8_t step2);
+static uint8_t Step_TimerStartSegment(int32_t target1, int32_t target2);
+static void Step_TimerTick(void);
+static void Step_TimerWaitIdle(void);
 static int32_t RoundI32(float value);
 static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
@@ -596,6 +618,141 @@ static void Pulse_Pin(GPIO_TypeDef *port, uint16_t pin)
   HAL_GPIO_WritePin(port, pin, GPIO_PIN_RESET);
 }
 
+static void Pulse_Motors(uint8_t step1, uint8_t step2)
+{
+  volatile uint32_t delay;
+
+  if (step1 != 0U)
+  {
+    HAL_GPIO_WritePin(STEP1_GPIO_Port, STEP1_Pin, GPIO_PIN_SET);
+  }
+  if (step2 != 0U)
+  {
+    HAL_GPIO_WritePin(STEP2_GPIO_Port, STEP2_Pin, GPIO_PIN_SET);
+  }
+
+  for (delay = 0U; delay < STEP_PULSE_DELAY; delay++)
+  {
+    __NOP();
+  }
+
+  if (step1 != 0U)
+  {
+    HAL_GPIO_WritePin(STEP1_GPIO_Port, STEP1_Pin, GPIO_PIN_RESET);
+  }
+  if (step2 != 0U)
+  {
+    HAL_GPIO_WritePin(STEP2_GPIO_Port, STEP2_Pin, GPIO_PIN_RESET);
+  }
+}
+
+static uint8_t Step_TimerStartSegment(int32_t target1, int32_t target2)
+{
+  int32_t d1 = target1 - robot.motor1_pos;
+  int32_t d2 = target2 - robot.motor2_pos;
+  uint32_t n1 = AbsI32(d1);
+  uint32_t n2 = AbsI32(d2);
+  uint32_t major = (n1 > n2) ? n1 : n2;
+
+  if (major == 0U)
+  {
+    return 1U;
+  }
+
+  if ((float)major > (MAX_STEP_FREQ_HZ * ((float)DDA_TICK_US / 1000000.0f)))
+  {
+    Stop_Motion(0U);
+    robot.state = MACHINE_ERROR;
+    Serial_Send("ER STEP RATE\r\n");
+    return 0U;
+  }
+
+  if (major > STEP_SLOTS_PER_DDA)
+  {
+    Stop_Motion(0U);
+    robot.state = MACHINE_ERROR;
+    Serial_Send("ER STEP TIMER\r\n");
+    return 0U;
+  }
+
+  Step_TimerWaitIdle();
+
+  Set_Dir(1U, d1);
+  Set_Dir(2U, d2);
+
+  step_timer.n1 = n1;
+  step_timer.n2 = n2;
+  step_timer.total_slots = (uint16_t)STEP_SLOTS_PER_DDA;
+  step_timer.slot_index = 0U;
+  step_timer.acc1 = STEP_SLOTS_PER_DDA / 2U;
+  step_timer.acc2 = STEP_SLOTS_PER_DDA / 2U;
+  step_timer.dir1 = (d1 >= 0L) ? 1L : -1L;
+  step_timer.dir2 = (d2 >= 0L) ? 1L : -1L;
+  step_timer.active = 1U;
+
+  __HAL_TIM_SET_COUNTER(&htim3, 0U);
+  __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
+  HAL_TIM_Base_Start_IT(&htim3);
+  return 1U;
+}
+
+static void Step_TimerTick(void)
+{
+  uint8_t step1 = 0U;
+  uint8_t step2 = 0U;
+
+  if (step_timer.active == 0U)
+  {
+    HAL_TIM_Base_Stop_IT(&htim3);
+    return;
+  }
+
+  step_timer.acc1 += step_timer.n1;
+  step_timer.acc2 += step_timer.n2;
+
+  if (step_timer.acc1 >= step_timer.total_slots)
+  {
+    step_timer.acc1 -= step_timer.total_slots;
+    step1 = 1U;
+  }
+  if (step_timer.acc2 >= step_timer.total_slots)
+  {
+    step_timer.acc2 -= step_timer.total_slots;
+    step2 = 1U;
+  }
+
+  if ((step1 != 0U) || (step2 != 0U))
+  {
+    Pulse_Motors(step1, step2);
+    if (step1 != 0U)
+    {
+      robot.motor1_pos += step_timer.dir1;
+    }
+    if (step2 != 0U)
+    {
+      robot.motor2_pos += step_timer.dir2;
+    }
+  }
+
+  step_timer.slot_index++;
+  if (step_timer.slot_index >= step_timer.total_slots)
+  {
+    step_timer.active = 0U;
+    HAL_TIM_Base_Stop_IT(&htim3);
+  }
+}
+
+static void Step_TimerWaitIdle(void)
+{
+  while (step_timer.active != 0U)
+  {
+    if (estop_request != 0U)
+    {
+      return;
+    }
+  }
+}
+
 static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
 {
   float x = x_ui;
@@ -819,52 +976,9 @@ static uint8_t Planner_TargetAt(float s, float *x, float *y)
   return 1U;
 }
 
-static void Step_To_Target(int32_t target1, int32_t target2)
+static uint8_t Step_To_Target(int32_t target1, int32_t target2)
 {
-  int32_t d1 = target1 - robot.motor1_pos;
-  int32_t d2 = target2 - robot.motor2_pos;
-  uint32_t n1 = AbsI32(d1);
-  uint32_t n2 = AbsI32(d2);
-  uint32_t major = (n1 > n2) ? n1 : n2;
-  uint32_t i;
-  uint32_t acc1 = 0U;
-  uint32_t acc2 = 0U;
-
-  if (major == 0U)
-  {
-    return;
-  }
-
-  if ((float)major > (MAX_STEP_FREQ_HZ * ((float)DDA_TICK_US / 1000000.0f)))
-  {
-    Stop_Motion(0U);
-    robot.state = MACHINE_ERROR;
-    Serial_Send("ER STEP RATE\r\n");
-    return;
-  }
-
-  Set_Dir(1U, d1);
-  Set_Dir(2U, d2);
-
-  for (i = 0U; i < major; i++)
-  {
-    acc1 += n1;
-    acc2 += n2;
-
-    if (acc1 >= major)
-    {
-      acc1 -= major;
-      Pulse_Pin(STEP1_GPIO_Port, STEP1_Pin);
-      robot.motor1_pos += (d1 >= 0) ? 1L : -1L;
-    }
-
-    if (acc2 >= major)
-    {
-      acc2 -= major;
-      Pulse_Pin(STEP2_GPIO_Port, STEP2_Pin);
-      robot.motor2_pos += (d2 >= 0) ? 1L : -1L;
-    }
-  }
+  return Step_TimerStartSegment(target1, target2);
 }
 
 static void Planner_Clear(void)
@@ -1429,7 +1543,12 @@ static void Finish_Planner(void)
   PathBlock *last = &p->blocks[p->block_count - 1U];
 
   HAL_TIM_Base_Stop_IT(&htim2);
-  Step_To_Target(p->motor1_pos, p->motor2_pos);
+  Step_TimerWaitIdle();
+  if (Step_To_Target(p->motor1_pos, p->motor2_pos) == 0U)
+  {
+    return;
+  }
+  Step_TimerWaitIdle();
   robot.x = last->ex;
   robot.y = last->ey;
   robot.motor1_pos = p->motor1_pos;
@@ -1463,6 +1582,11 @@ static void Dda_Tick(void)
     return;
   }
 
+  if (step_timer.active != 0U)
+  {
+    return;
+  }
+
   p->tick_index++;
   now_s = ((float)p->tick_index * (float)DDA_TICK_US) / 1000000.0f;
   target_s = Planner_DistanceAt(p, now_s);
@@ -1482,7 +1606,10 @@ static void Dda_Tick(void)
     return;
   }
 
-  Step_To_Target(target1, target2);
+  if (Step_To_Target(target1, target2) == 0U)
+  {
+    return;
+  }
   p->last_s = target_s;
   p->x = x;
   p->y = y;
@@ -1523,6 +1650,8 @@ static void Handle_Planner_Done_Request(void)
 static void Stop_Motion(uint8_t disable_motors)
 {
   HAL_TIM_Base_Stop_IT(&htim2);
+  HAL_TIM_Base_Stop_IT(&htim3);
+  step_timer.active = 0U;
   Planner_Clear();
   robot.state = MACHINE_STOP;
   HAL_GPIO_WritePin(STEP1_GPIO_Port, STEP1_Pin, GPIO_PIN_RESET);
@@ -1539,6 +1668,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   if (htim->Instance == TIM2)
   {
     Dda_Tick();
+  }
+  else if (htim->Instance == TIM3)
+  {
+    Step_TimerTick();
   }
 }
 
@@ -1810,6 +1943,7 @@ int main(void)
   SystemClock_Config();
   MX_GPIO_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   MX_TIM4_Init();
   Serial_Init();
   Robot_Init();
@@ -1886,6 +2020,40 @@ static void MX_TIM2_Init(void)
 
   HAL_NVIC_SetPriority(TIM2_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(TIM2_IRQn);
+}
+
+static void MX_TIM3_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 72U - 1U;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = STEP_TIMER_US - 1UL;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_NVIC_SetPriority(TIM3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
 }
 
 static void MX_TIM4_Init(void)

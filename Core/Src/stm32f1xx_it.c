@@ -56,6 +56,7 @@
 
 /* External variables --------------------------------------------------------*/
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim3;
 void SerialProtocol_RxIrqHandler(void);
 
 /* USER CODE BEGIN EV */
@@ -204,6 +205,11 @@ void SysTick_Handler(void)
 void TIM2_IRQHandler(void)
 {
   HAL_TIM_IRQHandler(&htim2);
+}
+
+void TIM3_IRQHandler(void)
+{
+  HAL_TIM_IRQHandler(&htim3);
 }
 
 void USART1_IRQHandler(void)
