@@ -107,6 +107,8 @@ typedef struct
   float last_s;
   float x;
   float y;
+  float quant_err1;
+  float quant_err2;
   int32_t motor1_pos;
   int32_t motor2_pos;
   uint16_t block_count;
@@ -174,8 +176,10 @@ static uint8_t Step_TimerStartSegment(int32_t target1, int32_t target2);
 static void Step_TimerTick(void);
 static void Step_TimerWaitIdle(void);
 static int32_t RoundI32(float value);
+static uint8_t Scara_IK_RawFloat(float x_ui, float y_ui, float *p1, float *p2);
 static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
+static uint8_t Scara_IK_Dithered(float x_ui, float y_ui, int32_t *p1, int32_t *p2);
 static uint8_t Planner_Start(float feed, float accel, SpeedProfile profile);
 static void Servo_PenUp(void);
 static void Servo_PenDown(void);
@@ -753,7 +757,7 @@ static void Step_TimerWaitIdle(void)
   }
 }
 
-static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
+static uint8_t Scara_IK_RawFloat(float x_ui, float y_ui, float *p1, float *p2)
 {
   float x = x_ui;
   float y = y_ui - BASE_Y_MM;
@@ -793,8 +797,23 @@ static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
   th_l = atan2f(y, dx_l) + acosf(cl);
   th_r = atan2f(y, dx_r) - acosf(cr);
 
-  *p1 = RoundI32((th_l / TWO_PI) * (float)robot.steps_per_rev);
-  *p2 = RoundI32((th_r / TWO_PI) * (float)robot.steps_per_rev);
+  *p1 = (th_l / TWO_PI) * (float)robot.steps_per_rev;
+  *p2 = (th_r / TWO_PI) * (float)robot.steps_per_rev;
+  return 1U;
+}
+
+static uint8_t Scara_IK_Raw(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
+{
+  float raw1;
+  float raw2;
+
+  if (Scara_IK_RawFloat(x_ui, y_ui, &raw1, &raw2) == 0U)
+  {
+    return 0U;
+  }
+
+  *p1 = RoundI32(raw1);
+  *p2 = RoundI32(raw2);
   return 1U;
 }
 
@@ -810,6 +829,33 @@ static uint8_t Scara_IK(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
 
   *p1 = robot.zero1 + raw1;
   *p2 = robot.zero2 + raw2;
+  return 1U;
+}
+
+static uint8_t Scara_IK_Dithered(float x_ui, float y_ui, int32_t *p1, int32_t *p2)
+{
+  DdaPlanner *planner = &robot.planner;
+  float raw1;
+  float raw2;
+  float corrected1;
+  float corrected2;
+  int32_t q1;
+  int32_t q2;
+
+  if (Scara_IK_RawFloat(x_ui, y_ui, &raw1, &raw2) == 0U)
+  {
+    return 0U;
+  }
+
+  corrected1 = raw1 + planner->quant_err1;
+  corrected2 = raw2 + planner->quant_err2;
+  q1 = RoundI32(corrected1);
+  q2 = RoundI32(corrected2);
+  planner->quant_err1 = corrected1 - (float)q1;
+  planner->quant_err2 = corrected2 - (float)q2;
+
+  *p1 = robot.zero1 + q1;
+  *p2 = robot.zero2 + q2;
   return 1U;
 }
 
@@ -1411,6 +1457,8 @@ static uint8_t Planner_Start(float feed, float accel, SpeedProfile profile)
   p->active = 1U;
   p->tick_index = 0UL;
   p->last_s = 0.0f;
+  p->quant_err1 = 0.0f;
+  p->quant_err2 = 0.0f;
   p->block_index = 0U;
   p->x = robot.x;
   p->y = robot.y;
@@ -1598,7 +1646,7 @@ static void Dda_Tick(void)
 
   (void)Planner_TargetAt(target_s, &x, &y);
 
-  if (Scara_IK(x, y, &target1, &target2) == 0U)
+  if (Scara_IK_Dithered(x, y, &target1, &target2) == 0U)
   {
     Stop_Motion(0U);
     robot.state = MACHINE_ERROR;
